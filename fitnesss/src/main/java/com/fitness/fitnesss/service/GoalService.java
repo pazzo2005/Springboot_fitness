@@ -1,10 +1,8 @@
 package com.fitness.fitnesss.service;
 
-import java.util.List;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.domain.PageRequest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,8 +12,8 @@ import com.fitness.fitnesss.repo.FitnessRepo;
 @Service
 public class GoalService {
      private static final Logger log = LoggerFactory.getLogger(GoalService.class);
+     private static final String GLOBAL_GOAL_KEY = "GLOBAL_DEFAULT_GOAL";
      private final FitnessRepo fitnessrepo;
-     private final Object createGoalLock = new Object();
 
      public GoalService(FitnessRepo fitnessrepo) {
         this.fitnessrepo=fitnessrepo;
@@ -37,21 +35,20 @@ public class GoalService {
      }
 
      private FitnessGoal getOrCreateGoalForUpdate() {
-        List<FitnessGoal> goals = fitnessrepo.findFirstForUpdate(PageRequest.of(0, 1));
-        if (!goals.isEmpty()) {
-            return goals.get(0);
-        }
+        return fitnessrepo.findByGoalKeyForUpdate(GLOBAL_GOAL_KEY)
+                .orElseGet(() -> createGoalAndRecoverOnRace());
+     }
 
-        synchronized (createGoalLock) {
-            return fitnessrepo.findAll(PageRequest.of(0, 1))
-                    .stream()
-                    .findFirst()
-                    .orElseGet(() -> {
-                        FitnessGoal newGoal = new FitnessGoal();
-                        newGoal.setTargetCalories(2000.0);
-                        newGoal.setCurrentProgress(0.0);
-                        return fitnessrepo.saveAndFlush(newGoal);
-                    });
+     private FitnessGoal createGoalAndRecoverOnRace() {
+        try {
+            FitnessGoal newGoal = new FitnessGoal();
+            newGoal.setGoalKey(GLOBAL_GOAL_KEY);
+            newGoal.setTargetCalories(2000.0);
+            newGoal.setCurrentProgress(0.0);
+            return fitnessrepo.saveAndFlush(newGoal);
+        } catch (DataIntegrityViolationException ex) {
+            return fitnessrepo.findByGoalKeyForUpdate(GLOBAL_GOAL_KEY)
+                    .orElseThrow(() -> ex);
         }
      }
 }

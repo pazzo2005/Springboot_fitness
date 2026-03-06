@@ -4,6 +4,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Column;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 
@@ -14,6 +15,9 @@ public class FitnessGoal {
    @GeneratedValue(strategy = GenerationType.IDENTITY)
    private Long id;
 
+   @Column(nullable = false, unique = true, updatable = false, length = 64)
+   private String goalKey;
+
    private double targetCalories;
    private double currentProgress;
 
@@ -23,8 +27,9 @@ public class FitnessGoal {
    public FitnessGoal(){
     
    }
-   public FitnessGoal(Long id,double targetCalories,double currentProgress) {
+   public FitnessGoal(Long id, String goalKey, double targetCalories, double currentProgress) {
          this.id =id;
+         this.goalKey = goalKey;
          this.targetCalories=targetCalories;
          this.currentProgress=currentProgress;
    }
@@ -35,6 +40,14 @@ public class FitnessGoal {
 
     public double getTargetCalories() {
         return targetCalories;
+    }
+
+    public String getGoalKey() {
+        return goalKey;
+    }
+
+    public void setGoalKey(String goalKey) {
+        this.goalKey = goalKey;
     }
 
     public void setTargetCalories(double targetCalories) {
