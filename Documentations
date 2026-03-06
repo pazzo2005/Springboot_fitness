@@ -1,56 +1,372 @@
-Windows build can fail before Maven starts
-File: mvnw.cmd:92
-When it breaks: running mvnw.cmd in some Windows environments (I reproduced this here: Cannot index into a null array).
-How it breaks under the hood: script accesses (Get-Item $MAVEN_M2_PATH).Target[0]; if Target is null, PowerShell throws and wrapper exits before launching Maven.
-Solution: harden null handling:
-check Target exists and has items before indexing
-fallback to "$MAVEN_M2_PATH/wrapper/dists" directly
-Why this works: it removes a fragile symlink/junction assumption and guarantees path resolution.
-Build portability risk from Java 25 requirement
-File: pom.xml:30
-When it breaks: CI/dev machines on Java 17/21 (common LTS) fail to compile/start.
-How: Maven compiler and Spring runtime target java.version=25; older JDKs reject bytecode/source level.
-Solution: use LTS (21) unless Java 25 features are required; enforce via Maven Enforcer plugin.
-Why: keeps toolchain consistent across environments and avoids startup/build outages.
-Data inconsistency due to split transactions in POST flow
-Files: WorkoutController.java:31, WorkoutController.java:32, WorkoutService.java:19, GoalService.java:24
-When: workout save succeeds but goal update fails (DB lock/timeout/etc).
-How: each service method is separately transactional; first commit can complete before second starts/fails.
-Solution: create one application-service method with a single @Transactional boundary calling both operations.
-Why: atomicity (all succeed or all rollback).
-Multi-instance race can create multiple goal rows
-Files: GoalService.java:45, FitnessGoal.java:11
-When: two app nodes start/update simultaneously and no goal exists yet.
-How: synchronized only protects threads inside one JVM; other instances can insert concurrently.
-Solution: enforce DB uniqueness for singleton goal (e.g., fixed key/unique column) and upsert/retry on conflict.
-Why: database-level constraint is the only cross-instance lock authority.
-Lock contention can throw 500s under load
-Files: FitnessRepo.java:18, GoalService.java:40
-When: concurrent updates hold PESSIMISTIC_WRITE lock too long.
-How: waiting transactions can timeout/deadlock -> JPA exception -> 500.
-Solution: set lock timeout and add retry/backoff for transient lock failures; optionally switch to optimistic flow with @Version retry.
-Why: converts lock spikes from hard failures to controlled retries.
-Exception handler can itself fail and misclassify client errors
-File: GlobalExceptionHandler.java:21, GlobalExceptionHandler.java:27
-When: object-level validation errors occur, or service throws IllegalArgumentException.
-How: cast to FieldError can throw ClassCastException; broad RuntimeException maps client mistakes to 500.
-Solution: handle ObjectError safely, add explicit handlers for IllegalArgumentException (400) and not-found (404), keep generic 500 fallback last.
-Why: prevents error-handler crashes and improves API reliability/observability.
-Unbounded fetch can exhaust memory at scale
-File: WorkoutService.java:39
-When: workout table grows large.
-How: findAll() loads full dataset into memory; long GC pauses / OOM risk.
-Solution: paginate (Pageable) in API and repository calls.
-Why: bounded memory and predictable response time.
-Data loss on restart (in-memory DB)
-File: application.properties:2
-When: app restarts/crashes/deploys.
-How: jdbc:h2:mem: data exists only in process memory.
-Solution: use persistent DB (PostgreSQL/MySQL) for non-dev; keep H2 only in dev profile.
-Why: state survives process/system failures.
-Production exposure risk if H2 console enabled
-File: application.properties:7
-When: deployed with same config.
-How: DB console endpoint exposed; unauthorized access surface.
-Solution: disable by default, enable only in dev profile with network restrictions.
-Why: reduces attack surface and accidental data tampering.
+Engineering Failure Analysis & Resolutions
+
+This document records critical failures discovered during development, their root causes, and the engineering fixes implemented to improve reliability, portability, and scalability.
+
+The goal of documenting these issues is to ensure the system is robust, production-ready, and resilient under real-world conditions.
+
+1. Windows Build Failure Before Maven Starts
+
+Affected File
+
+mvnw.cmd:92
+When It Breaks
+
+Running mvnw.cmd in certain Windows environments.
+
+Observed Error
+Cannot index into a null array
+Root Cause
+
+The Maven wrapper script attempts to access:
+
+(Get-Item $MAVEN_M2_PATH).Target[0]
+
+If Target is null, PowerShell throws an exception, causing the wrapper to terminate before Maven is executed.
+
+Solution
+
+Added null-safe handling before accessing the target index.
+
+Key improvements:
+
+Verify that Target exists
+
+Verify that Target contains elements
+
+Provide a fallback path when no symlink is present
+
+Fallback path used:
+
+$MAVEN_M2_PATH/wrapper/dists
+Why This Works
+
+Removes reliance on fragile symlink/junction assumptions, making the Maven wrapper compatible across more Windows configurations.
+
+2. Build Portability Risk Due to Java 25 Requirement
+
+Affected File
+
+pom.xml:30
+When It Breaks
+
+Compilation fails when developers or CI systems run:
+
+Java 17
+
+Java 21 (common LTS environments)
+
+Root Cause
+
+The project originally targeted:
+
+<java.version>25</java.version>
+
+Older JDK versions cannot compile or run Java 25 bytecode.
+
+Solution
+
+Changed the project to use Java 21 (LTS).
+
+Additionally enforced the version using Maven Enforcer Plugin.
+
+Example configuration:
+
+<java.version>21</java.version>
+Why This Works
+
+Using Long Term Support (LTS) versions ensures compatibility across:
+
+CI/CD pipelines
+
+developer environments
+
+production servers
+
+3. Data Inconsistency Due to Split Transactions
+
+Affected Files
+
+WorkoutController.java:31
+WorkoutController.java:32
+WorkoutService.java:19
+GoalService.java:24
+When It Breaks
+
+Scenario:
+
+Workout save operation succeeds
+
+Goal update operation fails due to lock/timeout
+
+Result:
+
+Workout stored
+Goal update failed
+
+This creates partial commits and inconsistent system state.
+
+Root Cause
+
+Each service method had independent transaction boundaries.
+
+Example:
+
+workoutService.saveWorkout();
+goalService.updateGoal();
+
+If the second call fails, the first one remains committed.
+
+Solution
+
+Introduced a single application-level transactional method.
+
+Example:
+
+@Transactional
+public void saveWorkoutAndUpdateGoal(...) {
+    workoutService.saveWorkout(...);
+    goalService.updateGoal(...);
+}
+Why This Works
+
+Ensures atomic operations:
+
+Either all operations succeed OR all operations roll back
+4. Multi-Instance Race Condition Creating Duplicate Goal Records
+
+Affected Files
+
+GoalService.java:45
+FitnessGoal.java:11
+When It Breaks
+
+In distributed deployments with multiple application instances.
+
+Scenario:
+
+Instance A checks if goal exists
+Instance B checks if goal exists
+Both attempt to insert
+
+Result:
+
+Duplicate goal records created
+Root Cause
+
+synchronized blocks only protect threads within a single JVM, not across multiple application instances.
+
+Solution
+
+Moved concurrency control to the database layer.
+
+Implemented:
+
+Unique constraint on goal identifier
+
+Retry logic on insert conflict
+
+Example approach:
+
+INSERT ... ON CONFLICT RETRY
+Why This Works
+
+The database acts as the single source of truth, preventing duplicates across all application instances.
+
+5. Lock Contention Causing HTTP 500 Errors Under Load
+
+Affected Files
+
+FitnessRepo.java:18
+GoalService.java:40
+When It Breaks
+
+During high concurrency when multiple requests attempt to update the same data.
+
+Root Cause
+
+Use of:
+
+PESSIMISTIC_WRITE
+
+Transactions wait for locks and may eventually timeout or deadlock.
+
+Result:
+
+JPA exception → HTTP 500 error
+Solution
+
+Implemented:
+
+Lock timeout configuration
+
+Retry logic with exponential backoff
+
+Optional optimistic locking using @Version
+
+Why This Works
+
+Instead of failing immediately, the system retries transient conflicts, improving reliability under load.
+
+6. Exception Handler Failure and Incorrect Error Classification
+
+Affected File
+
+GlobalExceptionHandler.java:21
+GlobalExceptionHandler.java:27
+When It Breaks
+
+During validation errors involving ObjectError.
+
+Root Cause
+
+Handler attempted to cast all validation errors to:
+
+FieldError
+
+This caused:
+
+ClassCastException
+
+Additionally, generic RuntimeException mapping returned HTTP 500 even for client mistakes.
+
+Solution
+
+Improved error handling:
+
+Safe handling of ObjectError
+
+Explicit handlers for common cases
+
+Added mappings:
+
+IllegalArgumentException → 400
+ResourceNotFoundException → 404
+Generic fallback → 500
+Why This Works
+
+Prevents the exception handler from crashing and improves API error clarity.
+
+7. Unbounded Fetch Causing Memory Risk
+
+Affected File
+
+WorkoutService.java:39
+When It Breaks
+
+When the workout dataset grows significantly.
+
+Root Cause
+
+Using:
+
+findAll()
+
+This loads the entire dataset into memory.
+
+Risks:
+
+High memory usage
+
+GC pressure
+
+Potential OutOfMemoryError
+
+Solution
+
+Implemented pagination using Spring Data Pageable.
+
+Example:
+
+Page<Workout> workouts = repo.findAll(pageable);
+Why This Works
+
+Pagination ensures:
+
+bounded memory usage
+
+predictable response times
+
+scalable data access
+
+8. Data Loss on Application Restart
+
+Affected File
+
+application.properties:2
+When It Breaks
+
+When the application restarts or crashes.
+
+Root Cause
+
+Using an in-memory database:
+
+jdbc:h2:mem:
+
+All data exists only in process memory.
+
+Solution
+
+Configured persistent databases for non-development environments:
+
+PostgreSQL / MySQL
+
+H2 retained only for development profile.
+
+Why This Works
+
+Data now survives:
+
+restarts
+
+deployments
+
+system crashes
+
+9. Production Security Risk from H2 Console
+
+Affected File
+
+application.properties:7
+When It Breaks
+
+If deployed with the same configuration used for development.
+
+Root Cause
+
+H2 console endpoint exposed publicly.
+
+This introduces a database access surface.
+
+Solution
+
+Disabled console by default.
+
+Enabled only for development environments.
+
+Example:
+
+spring.h2.console.enabled=false
+Why This Works
+
+Reduces attack surface and prevents unauthorized data access.
+
+Conclusion
+
+Through these fixes the system now has improvements in:
+
+Build portability
+
+Transactional consistency
+
+Concurrency safety
+
+API reliability
+
+Memory efficiency
+
+Data persistence
+
+Security posture
+
+This documentation serves as a technical record of failure-driven improvements applied during development.
