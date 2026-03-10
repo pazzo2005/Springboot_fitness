@@ -1,7 +1,6 @@
 package com.fitness.fitnesss.service;
 
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.fitness.fitnesss.entity.WorkoutLogger;
 
@@ -16,7 +15,6 @@ public class WorkoutCommandService {
         this.goalService = goalService;
     }
 
-    @Transactional
     public WorkoutLogger createWorkoutAndUpdateGoal(WorkoutLogger workout) {
         WorkoutLogger savedWorkout = workoutService.saveWorkout(workout);
         goalService.updateProgress(savedWorkout.getCaloriesBurned());

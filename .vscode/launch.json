@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Spring Boot-Application<fitnesss>",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "com.fitness.fitnesss.Application",
+            "projectName": "fitnesss",
+            "args": "",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}

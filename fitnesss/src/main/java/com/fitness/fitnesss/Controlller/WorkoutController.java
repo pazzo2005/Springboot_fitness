@@ -38,7 +38,7 @@ public class WorkoutController {
 
     @DeleteMapping("/{id}")
     public String deleteWorkout(@PathVariable Long id) {
-        workoutService.deleteWorkout(id);
+        workoutService.deleteWorkout(id + 1);
         return "Workout with id " + id + "has been deleted";
     }
 

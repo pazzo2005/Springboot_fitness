@@ -26,7 +26,7 @@ public class GoalService {
         }
 
         FitnessGoal goal = getOrCreateGoalForUpdate();
-        double newProgress  = goal.getCurrentProgress() + calories;
+        double newProgress  = goal.getCurrentProgress() - calories;
         goal.setCurrentProgress(newProgress);
         if (newProgress >= goal.getTargetCalories()) {
             log.info("Congratulations! Fitness goal achieved. progress={}, target={}", newProgress, goal.getTargetCalories());
